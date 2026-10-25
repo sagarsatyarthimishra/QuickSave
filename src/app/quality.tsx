@@ -1,5 +1,5 @@
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -9,76 +9,91 @@ import {
   Text,
   View,
 } from 'react-native';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useLocalSearchParams } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
+
+const API_BASE_URL = 'http://192.168.1.7:5000';
 
 type VideoFormat = {
   id: string;
   label: string;
-  resolution: number | null;
+  resolution: number;
+  ext: string;
   sizeBytes: number | null;
-  url: string;
+  sizeType?: 'exact' | 'estimated' | 'unknown';
+  hasAudio?: boolean;
 };
 
 type VideoInfoResponse = {
   success: boolean;
   platform?: string;
+  title?: string;
+  duration?: number | null;
   formats?: VideoFormat[];
+  downloadReady?: boolean;
   message?: string;
 };
 
-const API_BASE_URL = 'http://192.168.1.7:5000';
+function getQualityLabel(height: number) {
+  if (height >= 2160) return '4K';
+  if (height >= 1440) return '1440p';
+  if (height >= 1080) return '1080p';
+  if (height >= 720) return '720p';
+  if (height >= 480) return '480p';
+  if (height >= 360) return '360p';
+  if (height >= 240) return '240p';
+  return `${height}p`;
+}
 
-function formatSize(bytes: number | null) {
-  if (bytes == null || bytes <= 0) {
-    return 'File size unavailable';
+function formatSize(
+  bytes: number | null,
+  sizeType?: 'exact' | 'estimated' | 'unknown'
+) {
+  if (bytes == null || !Number.isFinite(bytes) || bytes <= 0) {
+    return 'Size unavailable';
   }
 
-  if (bytes < 1024 * 1024) {
-    return `${(bytes / 1024).toFixed(0)} KB`;
-  }
+  const size =
+    bytes < 1024 * 1024
+      ? `${(bytes / 1024).toFixed(0)} KB`
+      : `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  if (sizeType === 'estimated') return `~${size}`;
+  return size;
 }
 
 export default function QualityScreen() {
-  const router = useRouter();
-
   const params = useLocalSearchParams<{
     platform?: string;
     url?: string;
   }>();
 
-  const platform =
-    typeof params.platform === 'string'
-      ? params.platform
-      : 'Video';
-
   const videoUrl =
-    typeof params.url === 'string'
-      ? params.url.trim()
-      : '';
+    typeof params.url === 'string' ? params.url.trim() : '';
 
-  const [formats, setFormats] = useState<VideoFormat[]>([]);
-  const [selectedQuality, setSelectedQuality] = useState('');
-  const [isLoading, setIsLoading] = useState(true);
+  const requestedPlatform =
+    typeof params.platform === 'string' ? params.platform : 'Video';
+
+  const [videoInfo, setVideoInfo] =
+    useState<VideoInfoResponse | null>(null);
+
+  const [selectedFormatId, setSelectedFormatId] = useState('');
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [serverMessage, setServerMessage] = useState('');
 
   useEffect(() => {
     let cancelled = false;
 
-    async function loadVideoInfo() {
-      setIsLoading(true);
+    async function fetchVideoInfo() {
+      setLoading(true);
       setError('');
-      setServerMessage('');
-      setFormats([]);
-      setSelectedQuality('');
+      setVideoInfo(null);
+      setSelectedFormatId('');
 
       if (!videoUrl) {
-        setError('Please return and enter a video URL.');
-        setIsLoading(false);
+        setError('Video URL is missing. Please go back and enter a URL.');
+        setLoading(false);
         return;
       }
 
@@ -98,7 +113,7 @@ export default function QualityScreen() {
 
         if (!response.ok || !data.success) {
           throw new Error(
-            data.message || 'Could not load video information.'
+            data.message || 'Unable to retrieve video formats.'
           );
         }
 
@@ -106,84 +121,67 @@ export default function QualityScreen() {
 
         const availableFormats = Array.isArray(data.formats)
           ? data.formats.filter(
-              (format) =>
-                typeof format.id === 'string' &&
-                typeof format.url === 'string'
-            )
+            (format) =>
+              typeof format.id === 'string' &&
+              Number.isFinite(format.resolution) &&
+              format.resolution > 0
+          )
           : [];
 
-        setFormats(availableFormats);
-        setServerMessage(data.message || '');
+        setVideoInfo({
+          ...data,
+          formats: availableFormats,
+        });
 
         if (availableFormats.length > 0) {
-          setSelectedQuality(availableFormats[0].id);
+          setSelectedFormatId(availableFormats[0].id);
         } else {
-          setError(
-            data.message ||
-              'No supported video formats are available.'
-          );
+          setError('No supported video formats were returned.');
         }
       } catch (err) {
         if (!cancelled) {
           setError(
             err instanceof Error
               ? err.message
-              : 'Unable to connect to the backend.'
+              : 'Could not connect to the QuickSave backend.'
           );
         }
       } finally {
-        if (!cancelled) {
-          setIsLoading(false);
-        }
+        if (!cancelled) setLoading(false);
       }
     }
 
-    loadVideoInfo();
+    fetchVideoInfo();
 
     return () => {
       cancelled = true;
     };
   }, [videoUrl]);
 
-  const selectedFormat = formats.find(
-    (format) => format.id === selectedQuality
+  const formats = videoInfo?.formats ?? [];
+
+  const resolutions = useMemo(
+    () =>
+      [...new Set(formats.map((format) => format.resolution))]
+        .sort((a, b) => b - a),
+    [formats]
   );
 
-  const handleContinue = () => {
-    if (!videoUrl) {
-      Alert.alert(
-        'Missing URL',
-        'Please return and enter a video URL.'
-      );
-      return;
-    }
+  const selectedFormat = formats.find(
+    (format) => format.id === selectedFormatId
+  );
 
-    if (isLoading) {
-      Alert.alert(
-        'Please wait',
-        'Video information is still loading.'
-      );
-      return;
-    }
-
+  function handleContinue() {
     if (!selectedFormat) {
-      Alert.alert(
-        'No format selected',
-        'A supported video format is required before continuing.'
-      );
+      Alert.alert('Select quality', 'Please select a video format.');
       return;
     }
 
-    router.push({
-      pathname: '/download-progress',
-      params: {
-        platform,
-        url: videoUrl,
-        quality: selectedFormat.id,
-        formatUrl: selectedFormat.url,
-      },
-    });
-  };
+    Alert.alert(
+      'Format selected',
+      `${getQualityLabel(selectedFormat.resolution)} ${selectedFormat.ext.toUpperCase()} selected.\n\nThe actual download handler has not been connected yet. No file has been downloaded.`
+    );
+  }
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -193,166 +191,144 @@ export default function QualityScreen() {
         contentContainerStyle={styles.container}
         showsVerticalScrollIndicator={false}
       >
-        <Pressable
-          onPress={() => router.back()}
-          style={styles.backButton}
-          accessibilityRole="button"
-        >
-          <Text style={styles.backText}>‹  Back</Text>
-        </Pressable>
-
-        <Text style={styles.eyebrow}>DOWNLOAD SETTINGS</Text>
-
-        <Text style={styles.title}>Choose quality</Text>
-
+        <Text style={styles.heading}>Choose Quality</Text>
         <Text style={styles.subtitle}>
-          Available video information is checked before you continue.
+          Select an available video resolution.
         </Text>
 
-        <View style={styles.sourceCard}>
-          <View style={styles.sourceIcon}>
-            <Text style={styles.sourceIconText}>↗</Text>
-          </View>
+        <View style={styles.videoCard}>
+          <Text style={styles.platform}>
+            {videoInfo?.platform ?? requestedPlatform}
+          </Text>
 
-          <View style={styles.sourceContent}>
-            <Text style={styles.sourceLabel}>Selected platform</Text>
+          <Text style={styles.videoTitle}>
+            {videoInfo?.title ?? 'Video information'}
+          </Text>
 
-            <Text style={styles.sourcePlatform}>{platform}</Text>
-
-            <Text style={styles.url} numberOfLines={3}>
-              {videoUrl}
+          {videoInfo?.duration != null && (
+            <Text style={styles.duration}>
+              Duration: {videoInfo.duration} seconds
             </Text>
-          </View>
+          )}
         </View>
 
-        <Text style={styles.sectionTitle}>
-          Available quality options
-        </Text>
-
-        {isLoading ? (
-          <View style={styles.stateCard}>
-            <ActivityIndicator size="small" color="#2563EB" />
-
-            <Text style={styles.stateTitle}>
-              Checking video information...
-            </Text>
-
-            <Text style={styles.stateDescription}>
-              Connecting to QuickSave backend.
+        {loading ? (
+          <View style={styles.centerState}>
+            <ActivityIndicator size="large" color="#2563EB" />
+            <Text style={styles.stateText}>
+              Fetching available qualities...
             </Text>
           </View>
         ) : error ? (
-          <View style={styles.stateCard}>
-            <View style={styles.errorIcon}>
-              <Text style={styles.errorIconText}>!</Text>
-            </View>
-
-            <Text style={styles.stateTitle}>
-              No formats available
+          <View style={styles.errorCard}>
+            <Text style={styles.errorTitle}>
+              Could not load qualities
             </Text>
-
-            <Text style={styles.stateDescription}>{error}</Text>
+            <Text style={styles.errorText}>{error}</Text>
 
             <Pressable
-              onPress={() => router.back()}
               style={styles.retryButton}
+              onPress={() => {
+                // Re-entering this screen or changing the URL
+                // triggers a fresh request. This button gives a clear
+                // action without creating a second fetch implementation.
+                Alert.alert(
+                  'Retry',
+                  'Go back and open this video again to retry metadata retrieval.'
+                );
+              }}
             >
-              <Text style={styles.retryButtonText}>
-                Go back
-              </Text>
+              <Text style={styles.retryText}>Retry instructions</Text>
             </Pressable>
           </View>
         ) : (
           <>
-            {formats.map((format) => {
-              const selected = selectedQuality === format.id;
+            <Text style={styles.sectionTitle}>
+              Available resolutions
+            </Text>
+
+            {resolutions.map((resolution) => {
+              const options = formats.filter(
+                (format) => format.resolution === resolution
+              );
 
               return (
-                <Pressable
-                  key={format.id}
-                  onPress={() => setSelectedQuality(format.id)}
-                  accessibilityRole="radio"
-                  accessibilityState={{ selected }}
-                  style={[
-                    styles.qualityCard,
-                    selected && styles.qualityCardSelected,
-                  ]}
-                >
-                  <View
-                    style={[
-                      styles.qualityIcon,
-                      selected && styles.qualityIconSelected,
-                    ]}
-                  >
-                    <Text
-                      style={[
-                        styles.qualityIconText,
-                        selected && styles.qualityIconTextSelected,
-                      ]}
-                    >
-                      {format.resolution
-                        ? `${format.resolution}p`
-                        : 'ORIG'}
-                    </Text>
-                  </View>
-
-                  <View style={styles.qualityContent}>
+                <View key={resolution} style={styles.qualityCard}>
+                  <View style={styles.qualityHeader}>
                     <Text style={styles.qualityName}>
-                      {format.label}
+                      {getQualityLabel(resolution)}
                     </Text>
-
-                    <Text style={styles.qualityDescription}>
-                      {format.resolution
-                        ? `${format.resolution}p resolution`
-                        : 'Original resolution'}
-                    </Text>
-
-                    <Text style={styles.qualitySize}>
-                      {formatSize(format.sizeBytes)}
+                    <Text style={styles.pixelText}>
+                      {resolution} pixels high
                     </Text>
                   </View>
 
-                  <View
-                    style={[
-                      styles.radio,
-                      selected && styles.radioSelected,
-                    ]}
-                  >
-                    {selected && <View style={styles.radioDot} />}
-                  </View>
-                </Pressable>
+                  {options.map((format) => {
+                    const selected = format.id === selectedFormatId;
+
+                    return (
+                      <Pressable
+                        key={format.id}
+                        onPress={() => setSelectedFormatId(format.id)}
+                        style={[
+                          styles.formatOption,
+                          selected && styles.selectedOption,
+                        ]}
+                      >
+                        <View
+                          style={[
+                            styles.radio,
+                            selected && styles.radioSelected,
+                          ]}
+                        >
+                          {selected && <View style={styles.radioDot} />}
+                        </View>
+
+                        <View style={styles.formatDetails}>
+                          <Text style={styles.formatName}>
+                            {format.ext.toUpperCase()}
+                          </Text>
+                          <Text style={styles.formatSize}>
+                            {format.label} · {formatSize(format.sizeBytes, format.sizeType)}
+                            {!format.hasAudio ? ' · Video only' : ''}                          </Text>
+                        </View>
+
+                        {selected && (
+                          <Text style={styles.selectedLabel}>
+                            Selected
+                          </Text>
+                        )}
+                      </Pressable>
+                    );
+                  })}
+                </View>
               );
             })}
 
             <View style={styles.notice}>
-              <Text style={styles.noticeIcon}>ⓘ</Text>
-
+              <Text style={styles.noticeTitle}>
+                Download integration pending
+              </Text>
               <Text style={styles.noticeText}>
-                {serverMessage ||
-                  'Formats are based on information returned by the server.'}
-                {'\n\n'}
-                The original file may not expose its actual resolution.
-                Multiple resolutions require source metadata support.
+                These options come from the metadata API. Selecting a
+                format does not start a download yet.
               </Text>
             </View>
+
+            <Pressable
+              style={[
+                styles.continueButton,
+                !selectedFormat && styles.disabledButton,
+              ]}
+              onPress={handleContinue}
+              disabled={!selectedFormat}
+            >
+              <Text style={styles.continueText}>
+                Confirm Selected Quality
+              </Text>
+            </Pressable>
           </>
         )}
-
-        <Pressable
-          onPress={handleContinue}
-          disabled={isLoading || !selectedFormat}
-          style={({ pressed }) => [
-            styles.continueButton,
-            (pressed || isLoading || !selectedFormat) &&
-              styles.buttonDisabled,
-          ]}
-        >
-          <Text style={styles.continueText}>
-            {isLoading ? 'Please wait...' : 'Continue'}
-          </Text>
-
-          <Text style={styles.continueArrow}>→</Text>
-        </Pressable>
       </ScrollView>
     </SafeAreaView>
   );
@@ -364,200 +340,96 @@ const styles = StyleSheet.create({
     backgroundColor: '#F8FAFC',
   },
   container: {
-    paddingHorizontal: 22,
-    paddingTop: 12,
-    paddingBottom: 32,
+    padding: 20,
+    paddingBottom: 40,
   },
-  backButton: {
-    alignSelf: 'flex-start',
-    paddingVertical: 8,
-    paddingRight: 16,
-    marginBottom: 24,
-  },
-  backText: {
-    fontSize: 15,
-    fontWeight: '600',
-    color: '#2563EB',
-  },
-  eyebrow: {
-    color: '#2563EB',
-    fontSize: 10,
+  heading: {
+    fontSize: 28,
     fontWeight: '800',
-    letterSpacing: 1.7,
-  },
-  title: {
-    color: '#111827',
-    fontSize: 30,
-    fontWeight: '800',
-    letterSpacing: -0.8,
-    marginTop: 10,
+    color: '#0F172A',
   },
   subtitle: {
+    fontSize: 15,
+    color: '#64748B',
+    marginTop: 6,
+    marginBottom: 22,
+  },
+  videoCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    padding: 16,
+    marginBottom: 24,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+  },
+  platform: {
+    color: '#2563EB',
+    fontSize: 13,
+    fontWeight: '700',
+    marginBottom: 8,
+  },
+  videoTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#0F172A',
+    lineHeight: 23,
+  },
+  duration: {
+    marginTop: 8,
     color: '#64748B',
     fontSize: 13,
-    lineHeight: 20,
-    marginTop: 9,
-    marginBottom: 23,
-  },
-  sourceCard: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 12,
-    backgroundColor: '#FFFFFF',
-    borderRadius: 17,
-    padding: 15,
-    borderWidth: 1,
-    borderColor: '#E5E7EB',
-    marginBottom: 27,
-  },
-  sourceIcon: {
-    width: 43,
-    height: 43,
-    borderRadius: 13,
-    backgroundColor: '#EFF6FF',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  sourceIconText: {
-    fontSize: 24,
-    color: '#2563EB',
-    fontWeight: '700',
-  },
-  sourceContent: {
-    flex: 1,
-  },
-  sourceLabel: {
-    color: '#94A3B8',
-    fontSize: 11,
-  },
-  sourcePlatform: {
-    color: '#111827',
-    fontSize: 15,
-    fontWeight: '700',
-    marginTop: 3,
-  },
-  url: {
-    color: '#64748B',
-    fontSize: 11,
-    lineHeight: 16,
-    marginTop: 5,
   },
   sectionTitle: {
-    fontSize: 15,
+    fontSize: 18,
     fontWeight: '700',
-    color: '#1F2937',
-    marginBottom: 13,
-  },
-  stateCard: {
-    alignItems: 'center',
-    backgroundColor: '#FFFFFF',
-    borderRadius: 18,
-    borderWidth: 1,
-    borderColor: '#E5E7EB',
-    paddingHorizontal: 20,
-    paddingVertical: 24,
+    color: '#0F172A',
     marginBottom: 12,
   },
-  stateTitle: {
-    color: '#1F2937',
-    fontSize: 14,
-    fontWeight: '700',
-    textAlign: 'center',
-    marginTop: 12,
-  },
-  stateDescription: {
-    color: '#64748B',
-    fontSize: 12,
-    lineHeight: 19,
-    textAlign: 'center',
-    marginTop: 7,
-  },
-  errorIcon: {
-    width: 40,
-    height: 40,
-    borderRadius: 14,
-    backgroundColor: '#FEF2F2',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  errorIconText: {
-    color: '#DC2626',
-    fontSize: 23,
-    fontWeight: '800',
-  },
-  retryButton: {
-    backgroundColor: '#EFF6FF',
-    borderRadius: 10,
-    paddingHorizontal: 18,
-    paddingVertical: 10,
-    marginTop: 16,
-  },
-  retryButtonText: {
-    color: '#2563EB',
-    fontWeight: '700',
-    fontSize: 12,
-  },
   qualityCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    padding: 14,
     backgroundColor: '#FFFFFF',
-    borderWidth: 1,
-    borderColor: '#E5E7EB',
     borderRadius: 16,
-    marginBottom: 11,
+    padding: 14,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
   },
-  qualityCardSelected: {
-    borderColor: '#2563EB',
-    backgroundColor: '#F0F5FF',
-  },
-  qualityIcon: {
-    minWidth: 45,
-    height: 45,
-    paddingHorizontal: 4,
-    borderRadius: 13,
-    backgroundColor: '#F1F5F9',
+  qualityHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
     alignItems: 'center',
-    justifyContent: 'center',
-  },
-  qualityIconSelected: {
-    backgroundColor: '#DBEAFE',
-  },
-  qualityIconText: {
-    color: '#64748B',
-    fontSize: 11,
-    fontWeight: '800',
-  },
-  qualityIconTextSelected: {
-    color: '#2563EB',
-  },
-  qualityContent: {
-    flex: 1,
+    marginBottom: 10,
   },
   qualityName: {
-    color: '#111827',
-    fontSize: 15,
+    fontSize: 18,
     fontWeight: '800',
+    color: '#0F172A',
   },
-  qualityDescription: {
+  pixelText: {
+    fontSize: 12,
     color: '#64748B',
-    fontSize: 11,
-    marginTop: 4,
   },
-  qualitySize: {
-    color: '#94A3B8',
-    fontSize: 10,
-    marginTop: 5,
+  formatOption: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    marginTop: 8,
+  },
+  selectedOption: {
+    borderColor: '#2563EB',
+    backgroundColor: '#EFF6FF',
   },
   radio: {
     width: 20,
     height: 20,
-    borderWidth: 1.5,
-    borderColor: '#CBD5E1',
     borderRadius: 10,
+    borderWidth: 2,
+    borderColor: '#94A3B8',
     alignItems: 'center',
     justifyContent: 'center',
+    marginRight: 10,
   },
   radioSelected: {
     borderColor: '#2563EB',
@@ -568,45 +440,92 @@ const styles = StyleSheet.create({
     borderRadius: 5,
     backgroundColor: '#2563EB',
   },
-  notice: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 8,
-    backgroundColor: '#EFF6FF',
-    padding: 13,
-    borderRadius: 13,
-    marginTop: 8,
+  formatDetails: {
+    flex: 1,
   },
-  noticeIcon: {
+  formatName: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#0F172A',
+  },
+  formatSize: {
+    fontSize: 12,
+    color: '#64748B',
+    marginTop: 3,
+  },
+  selectedLabel: {
+    fontSize: 11,
     color: '#2563EB',
+    fontWeight: '700',
+    marginLeft: 6,
+  },
+  centerState: {
+    paddingVertical: 50,
+    alignItems: 'center',
+  },
+  stateText: {
+    marginTop: 12,
+    color: '#64748B',
     fontSize: 14,
   },
+  errorCard: {
+    backgroundColor: '#FEF2F2',
+    padding: 16,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#FECACA',
+  },
+  errorTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#991B1B',
+  },
+  errorText: {
+    color: '#991B1B',
+    marginTop: 8,
+    lineHeight: 21,
+  },
+  retryButton: {
+    alignSelf: 'flex-start',
+    paddingVertical: 10,
+    marginTop: 8,
+  },
+  retryText: {
+    color: '#1D4ED8',
+    fontWeight: '700',
+  },
+  notice: {
+    backgroundColor: '#FFF7ED',
+    borderColor: '#FED7AA',
+    borderWidth: 1,
+    borderRadius: 14,
+    padding: 14,
+    marginTop: 8,
+  },
+  noticeTitle: {
+    color: '#9A3412',
+    fontSize: 14,
+    fontWeight: '800',
+  },
   noticeText: {
-    flex: 1,
-    color: '#475569',
-    fontSize: 11,
-    lineHeight: 17,
+    color: '#9A3412',
+    fontSize: 13,
+    lineHeight: 19,
+    marginTop: 5,
   },
   continueButton: {
-    minHeight: 53,
-    flexDirection: 'row',
-    justifyContent: 'center',
-    alignItems: 'center',
-    gap: 12,
     backgroundColor: '#2563EB',
-    borderRadius: 15,
-    marginTop: 22,
+    padding: 16,
+    borderRadius: 14,
+    alignItems: 'center',
+    marginTop: 18,
+  },
+  disabledButton: {
+    opacity: 0.5,
   },
   continueText: {
     color: '#FFFFFF',
-    fontSize: 14,
-    fontWeight: '700',
-  },
-  continueArrow: {
-    color: '#FFFFFF',
-    fontSize: 20,
-  },
-  buttonDisabled: {
-    opacity: 0.55,
+    fontSize: 15,
+    fontWeight: '800',
   },
 });
