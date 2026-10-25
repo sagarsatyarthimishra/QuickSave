@@ -1,41 +1,63 @@
 
-import { NativeTabs } from 'expo-router/native-tabs';
-import { Colors } from '@/constants/theme';
+import { Tabs } from 'expo-router';
+import { Platform, Text } from 'react-native';
 
 export default function AppTabs() {
-  const colors = Colors.light;
-
   return (
-    <NativeTabs
-      backgroundColor={colors.background}
-      indicatorColor={colors.backgroundElement}
-      labelStyle={{
-        selected: { color: '#2563EB' },
+    <Tabs
+      screenOptions={{
+        headerShown: false,
+        tabBarActiveTintColor: '#2563EB',
+        tabBarInactiveTintColor: '#94A3B8',
+        tabBarStyle: {
+          backgroundColor: '#FFFFFF',
+          borderTopColor: '#E5E7EB',
+          height: Platform.OS === 'ios' ? 86 : 64,
+          paddingTop: 8,
+          paddingBottom: Platform.OS === 'ios' ? 24 : 8,
+        },
+        tabBarLabelStyle: {
+          fontSize: 11,
+          fontWeight: '600',
+        },
       }}
     >
-      <NativeTabs.Trigger name="index">
-        <NativeTabs.Trigger.Label>Home</NativeTabs.Trigger.Label>
-        <NativeTabs.Trigger.Icon
-          sf="house.fill"
-          md="home"
-        />
-      </NativeTabs.Trigger>
+      <Tabs.Screen
+        name="index"
+        options={{
+          title: 'Home',
+          tabBarIcon: ({ color }) => (
+            <Text style={{ color, fontSize: 22 }}>⌂</Text>
+          ),
+        }}
+      />
 
-      <NativeTabs.Trigger name="downloads">
-        <NativeTabs.Trigger.Label>Downloads</NativeTabs.Trigger.Label>
-        <NativeTabs.Trigger.Icon
-          sf="arrow.down.circle"
-          md="download"
-        />
-      </NativeTabs.Trigger>
+      <Tabs.Screen
+        name="downloads"
+        options={{
+          title: 'Downloads',
+          tabBarIcon: ({ color }) => (
+            <Text style={{ color, fontSize: 21 }}>↓</Text>
+          ),
+        }}
+      />
 
-      <NativeTabs.Trigger name="settings">
-        <NativeTabs.Trigger.Label>Settings</NativeTabs.Trigger.Label>
-        <NativeTabs.Trigger.Icon
-          sf="gearshape"
-          md="settings"
-        />
-      </NativeTabs.Trigger>
-    </NativeTabs>
+      <Tabs.Screen
+        name="settings"
+        options={{
+          title: 'Settings',
+          tabBarIcon: ({ color }) => (
+            <Text style={{ color, fontSize: 21 }}>⚙</Text>
+          ),
+        }}
+      />
+
+      <Tabs.Screen
+        name="explore"
+        options={{
+          href: null,
+        }}
+      />
+    </Tabs>
   );
 }

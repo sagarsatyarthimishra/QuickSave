@@ -1,18 +1,42 @@
+
 import { DarkTheme, DefaultTheme, ThemeProvider } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
-import { useColorScheme } from 'react-native';
+import { useCallback, useEffect, useState } from 'react';
+import { useColorScheme, View } from 'react-native';
 
 import { AnimatedSplashOverlay } from '@/components/animated-icon';
 import AppTabs from '@/components/app-tabs';
 
-SplashScreen.preventAutoHideAsync();
+SplashScreen.preventAutoHideAsync().catch(() => {});
 
 export default function TabLayout() {
   const colorScheme = useColorScheme();
+  const [showSplash, setShowSplash] = useState(true);
+
+  const finishSplash = useCallback(() => {
+    setShowSplash(false);
+  }, []);
+
+  useEffect(() => {
+    // Fallback so the app can open even if an animation callback fails.
+    const timer = setTimeout(() => {
+      setShowSplash(false);
+    }, 4000);
+
+    return () => clearTimeout(timer);
+  }, []);
+
   return (
-    <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-      <AnimatedSplashOverlay />
-      <AppTabs />
+    <ThemeProvider
+      value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}
+    >
+      <View style={{ flex: 1, backgroundColor: '#F8FAFC' }}>
+        {showSplash ? (
+          <AnimatedSplashOverlay onFinish={finishSplash} />
+        ) : (
+          <AppTabs />
+        )}
+      </View>
     </ThemeProvider>
   );
 }
