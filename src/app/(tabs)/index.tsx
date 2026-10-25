@@ -21,10 +21,10 @@ const PLATFORMS: {
   symbol: string;
   color: string;
 }[] = [
-  { name: 'YouTube', symbol: '▶', color: '#FF0033' },
-  { name: 'Facebook', symbol: 'f', color: '#1877F2' },
-  { name: 'Instagram', symbol: '◎', color: '#C13584' },
-];
+    { name: 'YouTube', symbol: '▶', color: '#FF0033' },
+    { name: 'Facebook', symbol: 'f', color: '#1877F2' },
+    { name: 'Instagram', symbol: '◎', color: '#C13584' },
+  ];
 
 export default function HomeScreen() {
   const router = useRouter();
@@ -61,31 +61,57 @@ export default function HomeScreen() {
       return;
     }
 
+    // const hostname = parsedUrl.hostname.toLowerCase();
+    // const supportedHosts: Record<PlatformName, string[]> = {
+    //   YouTube: ['youtube.com', 'youtu.be'],
+    //   Facebook: ['facebook.com', 'fb.watch'],
+    //   Instagram: ['instagram.com'],
+    // };
+
+    // const isSupportedHost = supportedHosts[selectedPlatform].some(
+    //   (host) => hostname === host || hostname.endsWith(`.${host}`)
+    // );
+
+    // if (!isSupportedHost) {
+    //   Alert.alert(
+    //     'Check selected platform',
+    //     `This URL does not appear to be a ${selectedPlatform} link.`
+    //   );
+    //   return;
+    // }
+
     const hostname = parsedUrl.hostname.toLowerCase();
+
     const supportedHosts: Record<PlatformName, string[]> = {
       YouTube: ['youtube.com', 'youtu.be'],
       Facebook: ['facebook.com', 'fb.watch'],
       Instagram: ['instagram.com'],
     };
 
-    const isSupportedHost = supportedHosts[selectedPlatform].some(
-      (host) => hostname === host || hostname.endsWith(`.${host}`)
+    const hostMatches = supportedHosts[selectedPlatform].some(
+      (host) => hostname === host || hostname.endsWith(`.${host}`),
     );
 
-    if (!isSupportedHost) {
+    const isDirectVideo =
+      /\.(mp4|mov|m4v|webm)$/i.test(parsedUrl.pathname);
+
+    if (!hostMatches && !isDirectVideo) {
       Alert.alert(
-        'Check selected platform',
-        `This URL does not appear to be a ${selectedPlatform} link.`
+        'Unsupported URL',
+        'Enter a supported social-media link or a direct video-file URL.',
       );
       return;
     }
+
+    const platformToSend = hostMatches ? selectedPlatform : 'Direct Video';
+
 
     // Only navigate; never clear the URL input.
     setIsLoading(true);
     router.push({
       pathname: '/quality',
       params: {
-        platform: selectedPlatform,
+        platform: platformToSend,
         url: trimmedUrl,
       },
     });
@@ -161,7 +187,7 @@ export default function HomeScreen() {
                     style={[
                       styles.platformSymbol,
                       platform.name === 'Facebook' &&
-                        styles.facebookSymbol,
+                      styles.facebookSymbol,
                     ]}
                   >
                     {platform.symbol}
