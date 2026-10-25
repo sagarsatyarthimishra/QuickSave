@@ -12,6 +12,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
+import { useRouter } from 'expo-router';
 
 type PlatformName = 'YouTube' | 'Facebook' | 'Instagram';
 
@@ -20,12 +21,13 @@ const PLATFORMS: {
   symbol: string;
   color: string;
 }[] = [
-  { name: 'YouTube', symbol: '▶', color: '#FF0033' },
-  { name: 'Facebook', symbol: 'f', color: '#1877F2' },
-  { name: 'Instagram', symbol: '◎', color: '#C13584' },
-];
+    { name: 'YouTube', symbol: '▶', color: '#FF0033' },
+    { name: 'Facebook', symbol: 'f', color: '#1877F2' },
+    { name: 'Instagram', symbol: '◎', color: '#C13584' },
+  ];
 
 export default function HomeScreen() {
+  const router = useRouter();
   const [selectedPlatform, setSelectedPlatform] =
     useState<PlatformName>('YouTube');
   const [videoUrl, setVideoUrl] = useState('');
@@ -44,30 +46,40 @@ export default function HomeScreen() {
 
     let parsedUrl: URL;
 
-    try {
-      parsedUrl = new URL(trimmedUrl);
-    } catch {
-      Alert.alert('Invalid URL', 'Please enter a valid video URL.');
-      return;
-    }
+    const handleDownload = () => {
+      Keyboard.dismiss();
 
-    if (!['http:', 'https:'].includes(parsedUrl.protocol)) {
-      Alert.alert('Invalid URL', 'Please enter an HTTP or HTTPS URL.');
-      return;
-    }
+      const trimmedUrl = videoUrl.trim();
 
-    setIsLoading(true);
+      if (!trimmedUrl) {
+        Alert.alert('Video URL required', 'Please paste a video URL first.');
+        return;
+      }
 
-    // UI prototype only. Actual video downloading
-    // will be implemented in a later step.
-    setTimeout(() => {
-      setIsLoading(false);
+      let parsedUrl: URL;
 
-      Alert.alert(
-        'UI prototype',
-        `${selectedPlatform} URL accepted.\n\nActual video processing and quality selection will be added in the next steps.`,
-      );
-    }, 500);
+      try {
+        parsedUrl = new URL(trimmedUrl);
+      } catch {
+        Alert.alert('Invalid URL', 'Please enter a valid video URL.');
+        return;
+      }
+
+      if (!['http:', 'https:'].includes(parsedUrl.protocol)) {
+        Alert.alert('Invalid URL', 'Please enter a valid HTTP or HTTPS URL.');
+        return;
+      }
+
+      router.push({
+        pathname: '/quality',
+        params: {
+          platform: selectedPlatform,
+          url: trimmedUrl,
+        },
+      });
+    };
+
+    setIsLoading(false);
   };
 
   return (
@@ -141,7 +153,7 @@ export default function HomeScreen() {
                     style={[
                       styles.platformSymbol,
                       platform.name === 'Facebook' &&
-                        styles.facebookSymbol,
+                      styles.facebookSymbol,
                     ]}
                   >
                     {platform.symbol}
@@ -264,7 +276,7 @@ const styles = StyleSheet.create({
   container: {
     paddingHorizontal: 22,
     paddingTop: 12,
-    paddingBottom: 32,
+    paddingBottom: 24,
   },
   header: {
     flexDirection: 'row',
