@@ -13,6 +13,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as MediaLibrary from 'expo-media-library/legacy';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 type DownloadState = 'ready' | 'downloading' | 'completed' | 'cancelled' | 'error';
 
 export default function DownloadProgressScreen() {
@@ -121,12 +122,47 @@ export default function DownloadProgressScreen() {
 
       await MediaLibrary.saveToLibraryAsync(result.uri);
 
+      // Save completed download in persistent history
+      const historyKey = '@quicksave_download_history';
+
+      const existingData = await AsyncStorage.getItem(historyKey);
+      const history = existingData ? JSON.parse(existingData) : [];
+
+      history.unshift({
+        id: `${Date.now()}`,
+        platform,
+        url: videoUrl,
+        quality,
+        fileUri: result.uri,
+        downloadedAt: new Date().toISOString(),
+        status: 'completed',
+      });
+
+      await AsyncStorage.setItem(
+        historyKey,
+        JSON.stringify(history),
+      );
+
       if (!activeRef.current) return;
 
       setProgress(100);
       setStatus('completed');
-      setMessage('Video saved to your Gallery.');
-      Alert.alert('Download complete', 'The video was saved to your Gallery.');
+      setMessage('Video saved to your Gallery and download history.');
+
+      Alert.alert(
+        'Download complete',
+        'Video successfully saved to Gallery and Downloads history.',
+        [
+          {
+            text: 'OK',
+            onPress: () => {
+              router.dismissAll();
+              router.replace('/(tabs)/downloads');
+            },
+          },
+        ],
+        { cancelable: false },
+      );
     } catch (error) {
       if (!activeRef.current) return;
 

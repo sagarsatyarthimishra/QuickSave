@@ -13,6 +13,8 @@ import {
 import { useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
+import { useFocusEffect } from 'expo-router';
+import { useCallback } from 'react';
 
 type PlatformName = 'YouTube' | 'Facebook' | 'Instagram';
 
@@ -34,6 +36,12 @@ export default function HomeScreen() {
 
   const [videoUrl, setVideoUrl] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  useFocusEffect(
+    useCallback(() => {
+      setIsLoading(false);
+      setVideoUrl('');
+    }, [])
+  );
 
   const handleDownload = () => {
     Keyboard.dismiss();
