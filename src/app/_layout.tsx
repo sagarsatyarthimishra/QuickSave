@@ -1,41 +1,39 @@
 
-import { DarkTheme, DefaultTheme, ThemeProvider } from 'expo-router';
+import { DarkTheme, DefaultTheme, Stack, ThemeProvider } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { useCallback, useEffect, useState } from 'react';
 import { useColorScheme, View } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
-
 import { AnimatedSplashOverlay } from '@/components/animated-icon';
-import AppTabs from '@/components/app-tabs';
 
 SplashScreen.preventAutoHideAsync().catch(() => {});
 
-export default function TabLayout() {
+export default function RootLayout() {
   const colorScheme = useColorScheme();
   const [showSplash, setShowSplash] = useState(true);
 
   const finishSplash = useCallback(() => {
     setShowSplash(false);
+    SplashScreen.hideAsync().catch(() => {});
   }, []);
 
   useEffect(() => {
-    const timer = setTimeout(() => {
-      setShowSplash(false);
-    }, 4000);
-
+    const timer = setTimeout(finishSplash, 4000);
     return () => clearTimeout(timer);
-  }, []);
+  }, [finishSplash]);
 
   return (
     <SafeAreaProvider>
-      <ThemeProvider
-        value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}
-      >
+      <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
         <View style={{ flex: 1, backgroundColor: '#F8FAFC' }}>
           {showSplash ? (
             <AnimatedSplashOverlay onFinish={finishSplash} />
           ) : (
-            <AppTabs />
+            <Stack screenOptions={{ headerShown: false }}>
+              <Stack.Screen name="(tabs)" />
+              <Stack.Screen name="quality" />
+              <Stack.Screen name="download-progress" />
+            </Stack>
           )}
         </View>
       </ThemeProvider>

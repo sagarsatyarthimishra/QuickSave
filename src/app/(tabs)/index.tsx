@@ -1,5 +1,5 @@
 
-import React, { useState } from 'react';
+import { useState } from 'react';
 import {
   Alert,
   Keyboard,
@@ -10,9 +10,9 @@ import {
   TextInput,
   View,
 } from 'react-native';
+import { useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
-import { useRouter } from 'expo-router';
 
 type PlatformName = 'YouTube' | 'Facebook' | 'Instagram';
 
@@ -21,65 +21,74 @@ const PLATFORMS: {
   symbol: string;
   color: string;
 }[] = [
-    { name: 'YouTube', symbol: '▶', color: '#FF0033' },
-    { name: 'Facebook', symbol: 'f', color: '#1877F2' },
-    { name: 'Instagram', symbol: '◎', color: '#C13584' },
-  ];
+  { name: 'YouTube', symbol: '▶', color: '#FF0033' },
+  { name: 'Facebook', symbol: 'f', color: '#1877F2' },
+  { name: 'Instagram', symbol: '◎', color: '#C13584' },
+];
 
 export default function HomeScreen() {
   const router = useRouter();
+
   const [selectedPlatform, setSelectedPlatform] =
     useState<PlatformName>('YouTube');
-  const [videoUrl, setVideoUrl] = useState('');
 
+  const [videoUrl, setVideoUrl] = useState('');
   const [isLoading, setIsLoading] = useState(false);
 
   const handleDownload = () => {
     Keyboard.dismiss();
 
-    const trimmedUrl = videoUrl.trim();
+    if (isLoading) return;
 
+    const trimmedUrl = videoUrl.trim();
     if (!trimmedUrl) {
-      Alert.alert('Video URL required', 'Please paste a video URL first.');
+      Alert.alert('URL required', 'Please paste a video URL first.');
       return;
     }
 
     let parsedUrl: URL;
+    try {
+      parsedUrl = new URL(
+        /^https?:\/\//i.test(trimmedUrl) ? trimmedUrl : `https://${trimmedUrl}`
+      );
+    } catch {
+      Alert.alert('Invalid URL', 'Please enter a valid video URL.');
+      return;
+    }
 
-    const handleDownload = () => {
-      Keyboard.dismiss();
+    if (!['https:', 'http:'].includes(parsedUrl.protocol)) {
+      Alert.alert('Invalid URL', 'Only HTTP and HTTPS links are supported.');
+      return;
+    }
 
-      const trimmedUrl = videoUrl.trim();
-
-      if (!trimmedUrl) {
-        Alert.alert('Video URL required', 'Please paste a video URL first.');
-        return;
-      }
-
-      let parsedUrl: URL;
-
-      try {
-        parsedUrl = new URL(trimmedUrl);
-      } catch {
-        Alert.alert('Invalid URL', 'Please enter a valid video URL.');
-        return;
-      }
-
-      if (!['http:', 'https:'].includes(parsedUrl.protocol)) {
-        Alert.alert('Invalid URL', 'Please enter a valid HTTP or HTTPS URL.');
-        return;
-      }
-
-      router.push({
-        pathname: '/quality',
-        params: {
-          platform: selectedPlatform,
-          url: trimmedUrl,
-        },
-      });
+    const hostname = parsedUrl.hostname.toLowerCase();
+    const supportedHosts: Record<PlatformName, string[]> = {
+      YouTube: ['youtube.com', 'youtu.be'],
+      Facebook: ['facebook.com', 'fb.watch'],
+      Instagram: ['instagram.com'],
     };
 
-    setIsLoading(false);
+    const isSupportedHost = supportedHosts[selectedPlatform].some(
+      (host) => hostname === host || hostname.endsWith(`.${host}`)
+    );
+
+    if (!isSupportedHost) {
+      Alert.alert(
+        'Check selected platform',
+        `This URL does not appear to be a ${selectedPlatform} link.`
+      );
+      return;
+    }
+
+    // Only navigate; never clear the URL input.
+    setIsLoading(true);
+    router.push({
+      pathname: '/quality',
+      params: {
+        platform: selectedPlatform,
+        url: trimmedUrl,
+      },
+    });
   };
 
   return (
@@ -91,7 +100,6 @@ export default function HomeScreen() {
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
       >
-        {/* Header */}
         <View style={styles.header}>
           <View style={styles.brandRow}>
             <View style={styles.logo}>
@@ -111,13 +119,14 @@ export default function HomeScreen() {
           </View>
         </View>
 
-        {/* Welcome */}
         <View style={styles.welcomeSection}>
           <Text style={styles.eyebrow}>VIDEO DOWNLOADER</Text>
 
           <Text style={styles.heading}>
             Save what you{'\n'}
-            <Text style={styles.headingAccent}>love watching.</Text>
+            <Text style={styles.headingAccent}>
+              love watching.
+            </Text>
           </Text>
 
           <Text style={styles.description}>
@@ -125,7 +134,6 @@ export default function HomeScreen() {
           </Text>
         </View>
 
-        {/* Platform selection */}
         <Text style={styles.sectionTitle}>Choose a platform</Text>
 
         <View style={styles.platformRow}>
@@ -153,7 +161,7 @@ export default function HomeScreen() {
                     style={[
                       styles.platformSymbol,
                       platform.name === 'Facebook' &&
-                      styles.facebookSymbol,
+                        styles.facebookSymbol,
                     ]}
                   >
                     {platform.symbol}
@@ -182,7 +190,6 @@ export default function HomeScreen() {
           })}
         </View>
 
-        {/* URL input card */}
         <View style={styles.inputCard}>
           <View style={styles.cardHeadingRow}>
             <View style={styles.linkIcon}>
@@ -200,12 +207,12 @@ export default function HomeScreen() {
           <TextInput
             value={videoUrl}
             onChangeText={setVideoUrl}
-            placeholder="https://example.com/video"
+            placeholder="https://www.youtube.com/shorts/..."
             placeholderTextColor="#9CA3AF"
             autoCapitalize="none"
             autoCorrect={false}
             keyboardType="url"
-            returnKeyType="done"
+            returnKeyType="go"
             onSubmitEditing={handleDownload}
             style={styles.urlInput}
             accessibilityLabel="Video URL"
@@ -214,6 +221,7 @@ export default function HomeScreen() {
           <Pressable
             onPress={handleDownload}
             disabled={isLoading}
+            accessibilityRole="button"
             style={({ pressed }) => [
               styles.downloadButton,
               pressed && styles.buttonPressed,
@@ -221,9 +229,11 @@ export default function HomeScreen() {
             ]}
           >
             <Text style={styles.downloadIcon}>↓</Text>
+
             <Text style={styles.downloadButtonText}>
-              {isLoading ? 'Checking link...' : 'Continue'}
+              {isLoading ? 'Opening...' : 'Continue'}
             </Text>
+
             {!isLoading && (
               <Text style={styles.buttonArrow}>→</Text>
             )}
@@ -232,15 +242,15 @@ export default function HomeScreen() {
           <View style={styles.noticeRow}>
             <Text style={styles.noticeIcon}>ⓘ</Text>
             <Text style={styles.noticeText}>
-              Only use supported links and content you are
-              authorized to download.
+              Use supported links and only download content you are
+              authorized to save.
             </Text>
           </View>
         </View>
 
-        {/* Download activity */}
         <View style={styles.activityHeader}>
           <Text style={styles.sectionTitle}>Download activity</Text>
+
           <View style={styles.historyBadge}>
             <Text style={styles.historyBadgeText}>RECENT</Text>
           </View>
@@ -254,14 +264,12 @@ export default function HomeScreen() {
           <Text style={styles.emptyTitle}>Nothing here yet</Text>
 
           <Text style={styles.emptyDescription}>
-            Your download progress and saved videos will
-            appear here.
+            Your download progress and saved videos will appear here.
           </Text>
         </View>
 
-        {/* Footer */}
         <Text style={styles.footer}>
-          QUICKSave  ·  SIMPLE. FAST. ORGANIZED.
+          QUICKSAVE · SIMPLE. FAST. ORGANIZED.
         </Text>
       </ScrollView>
     </SafeAreaView>
@@ -276,7 +284,7 @@ const styles = StyleSheet.create({
   container: {
     paddingHorizontal: 22,
     paddingTop: 12,
-    paddingBottom: 24,
+    paddingBottom: 32,
   },
   header: {
     flexDirection: 'row',

@@ -6,30 +6,38 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 export default function AppTabs() {
   const insets = useSafeAreaInsets();
 
+  const bottomInset = Math.max(insets.bottom, 8);
+
   return (
     <Tabs
       screenOptions={{
         headerShown: false,
         tabBarActiveTintColor: '#2563EB',
         tabBarInactiveTintColor: '#94A3B8',
+
         tabBarStyle: {
           backgroundColor: '#FFFFFF',
           borderTopColor: '#E5E7EB',
+          borderTopWidth: 1,
 
           height:
             Platform.OS === 'ios'
-              ? 60 + insets.bottom
-              : 56 + insets.bottom,
+              ? 56 + bottomInset
+              : 56 + bottomInset,
 
           paddingTop: 7,
-          paddingBottom:
-            Platform.OS === 'ios'
-              ? Math.max(insets.bottom, 8)
-              : Math.max(insets.bottom, 8),
+          paddingBottom: bottomInset,
+
+          elevation: 8,
         },
+
         tabBarLabelStyle: {
           fontSize: 11,
           fontWeight: '600',
+        },
+
+        tabBarItemStyle: {
+          paddingVertical: 0,
         },
       }}
     >
@@ -62,8 +70,12 @@ export default function AppTabs() {
           ),
         }}
       />
-
-      <Tabs.Screen name="quality" options={{ href: null }} />
+      <Tabs.Screen
+        name="explore"
+        options={{
+          href: null,
+        }}
+      />
     </Tabs>
   );
 }
