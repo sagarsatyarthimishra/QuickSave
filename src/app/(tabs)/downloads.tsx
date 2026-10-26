@@ -22,9 +22,35 @@ type DownloadItem = {
   url: string;
   quality: string;
   fileUri: string;
+  fileName?: string;
+  title?: string;
   downloadedAt: string;
   status: 'completed';
 };
+
+function parseHistory(value: string | null): DownloadItem[] {
+  if (!value) return [];
+
+  try {
+    const parsed: unknown = JSON.parse(value);
+    if (!Array.isArray(parsed)) return [];
+
+    return parsed.filter(
+      (item): item is DownloadItem =>
+        item !== null &&
+        typeof item === 'object' &&
+        typeof item.id === 'string' &&
+        typeof item.platform === 'string' &&
+        typeof item.url === 'string' &&
+        typeof item.quality === 'string' &&
+        typeof item.fileUri === 'string' &&
+        typeof item.downloadedAt === 'string' &&
+        item.status === 'completed',
+    );
+  } catch {
+    return [];
+  }
+}
 
 export default function DownloadsScreen() {
   const router = useRouter();
@@ -36,33 +62,7 @@ export default function DownloadsScreen() {
   const loadDownloads = useCallback(async () => {
     try {
       const saved = await AsyncStorage.getItem(STORAGE_KEY);
-
-      if (!saved) {
-        setDownloads([]);
-        return;
-      }
-
-      const parsed: unknown = JSON.parse(saved);
-
-      if (!Array.isArray(parsed)) {
-        setDownloads([]);
-        return;
-      }
-
-      const validDownloads = parsed.filter(
-        (item): item is DownloadItem =>
-          item !== null &&
-          typeof item === 'object' &&
-          typeof item.id === 'string' &&
-          typeof item.platform === 'string' &&
-          typeof item.url === 'string' &&
-          typeof item.quality === 'string' &&
-          typeof item.fileUri === 'string' &&
-          typeof item.downloadedAt === 'string' &&
-          item.status === 'completed',
-      );
-
-      setDownloads(validDownloads);
+      setDownloads(parseHistory(saved));
     } catch {
       Alert.alert('Error', 'Could not load download history.');
     } finally {
@@ -73,44 +73,45 @@ export default function DownloadsScreen() {
 
   useFocusEffect(
     useCallback(() => {
-      loadDownloads();
+      void loadDownloads();
     }, [loadDownloads]),
   );
 
-  const handleRefresh = () => {
+  const handleRefresh = useCallback(() => {
     setRefreshing(true);
-    loadDownloads();
-  };
+    void loadDownloads();
+  }, [loadDownloads]);
 
-  const deleteItem = (id: string) => {
-    Alert.alert(
-      'Remove from history?',
-      'This removes the entry from QuickSave history, but does not delete the video from Gallery.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Remove',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              const updated = downloads.filter((item) => item.id !== id);
-
-              await AsyncStorage.setItem(
-                STORAGE_KEY,
-                JSON.stringify(updated),
-              );
-
-              setDownloads(updated);
-            } catch {
-              Alert.alert('Error', 'Could not remove this history entry.');
-            }
+  const deleteItem = useCallback(
+    (id: string) => {
+      Alert.alert(
+        'Remove from history?',
+        'This removes the entry from QuickSave history, but does not delete the video from Gallery.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Remove',
+            style: 'destructive',
+            onPress: async () => {
+              try {
+                const updated = downloads.filter((item) => item.id !== id);
+                await AsyncStorage.setItem(
+                  STORAGE_KEY,
+                  JSON.stringify(updated),
+                );
+                setDownloads(updated);
+              } catch {
+                Alert.alert('Error', 'Could not remove this history entry.');
+              }
+            },
           },
-        },
-      ],
-    );
-  };
+        ],
+      );
+    },
+    [downloads],
+  );
 
-  const clearHistory = () => {
+  const clearHistory = useCallback(() => {
     Alert.alert(
       'Clear download history?',
       'All QuickSave history entries will be removed. Videos already saved to Gallery will remain there.',
@@ -130,16 +131,13 @@ export default function DownloadsScreen() {
         },
       ],
     );
-  };
+  }, []);
 
   const formatDate = (value: string) => {
     const date = new Date(value);
-
-    if (Number.isNaN(date.getTime())) {
-      return 'Date unavailable';
-    }
-
-    return date.toLocaleString();
+    return Number.isNaN(date.getTime())
+      ? 'Date unavailable'
+      : date.toLocaleString();
   };
 
   return (
@@ -149,9 +147,7 @@ export default function DownloadsScreen() {
       <View style={styles.header}>
         <View style={styles.headerContent}>
           <Text style={styles.title}>Downloads</Text>
-          <Text style={styles.subtitle}>
-            Your saved download history.
-          </Text>
+          <Text style={styles.subtitle}>Your saved download history.</Text>
         </View>
 
         {downloads.length > 0 && (
@@ -174,8 +170,8 @@ export default function DownloadsScreen() {
         <View style={styles.summaryContent}>
           <Text style={styles.summaryTitle}>Download history</Text>
           <Text style={styles.summarySubtitle}>
-            {downloads.length}{' '}
-            {downloads.length === 1 ? 'video' : 'videos'} in history
+            {downloads.length} {downloads.length === 1 ? 'video' : 'videos'} in
+            history
           </Text>
         </View>
 
@@ -193,10 +189,8 @@ export default function DownloadsScreen() {
           </View>
 
           <Text style={styles.cardTitle}>No downloads yet</Text>
-
           <Text style={styles.description}>
-            Completed downloads will appear here after download history is
-            connected.
+            Completed videos will appear here after they are saved.
           </Text>
 
           <Pressable
@@ -229,9 +223,15 @@ export default function DownloadsScreen() {
               </View>
 
               <View style={styles.itemContent}>
-                <Text style={styles.itemTitle} numberOfLines={1}>
-                  {item.platform} video
+                <Text style={styles.itemTitle} numberOfLines={2}>
+                  {item.title || item.fileName || `${item.platform} video`}
                 </Text>
+
+                {item.fileName ? (
+                  <Text style={styles.itemFileName} numberOfLines={1}>
+                    {item.fileName}
+                  </Text>
+                ) : null}
 
                 <Text style={styles.itemMeta}>
                   {item.quality} · Completed
@@ -280,24 +280,10 @@ const styles = StyleSheet.create({
     marginTop: 16,
     gap: 12,
   },
-  headerContent: {
-    flex: 1,
-  },
-  title: {
-    fontSize: 29,
-    fontWeight: '800',
-    color: '#111827',
-  },
-  subtitle: {
-    fontSize: 13,
-    color: '#64748B',
-    marginTop: 7,
-  },
-  clearText: {
-    color: '#DC2626',
-    fontSize: 12,
-    fontWeight: '700',
-  },
+  headerContent: { flex: 1 },
+  title: { fontSize: 29, fontWeight: '800', color: '#111827' },
+  subtitle: { fontSize: 13, color: '#64748B', marginTop: 7 },
+  clearText: { color: '#DC2626', fontSize: 12, fontWeight: '700' },
   summaryCard: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -317,29 +303,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  summaryIconText: {
-    color: '#2563EB',
-    fontSize: 28,
-    fontWeight: '700',
-  },
-  summaryContent: {
-    flex: 1,
-  },
-  summaryTitle: {
-    color: '#111827',
-    fontSize: 14,
-    fontWeight: '700',
-  },
-  summarySubtitle: {
-    color: '#64748B',
-    fontSize: 11,
-    marginTop: 4,
-  },
-  count: {
-    color: '#2563EB',
-    fontSize: 20,
-    fontWeight: '800',
-  },
+  summaryIconText: { color: '#2563EB', fontSize: 28, fontWeight: '700' },
+  summaryContent: { flex: 1 },
+  summaryTitle: { color: '#111827', fontSize: 14, fontWeight: '700' },
+  summarySubtitle: { color: '#64748B', fontSize: 11, marginTop: 4 },
+  count: { color: '#2563EB', fontSize: 20, fontWeight: '800' },
   emptyCard: {
     alignItems: 'center',
     backgroundColor: '#FFFFFF',
@@ -357,10 +325,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  icon: {
-    fontSize: 32,
-    color: '#2563EB',
-  },
+  icon: { fontSize: 32, color: '#2563EB' },
   cardTitle: {
     fontSize: 17,
     fontWeight: '700',
@@ -381,15 +346,8 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     marginTop: 20,
   },
-  browseButtonText: {
-    color: '#FFFFFF',
-    fontWeight: '700',
-  },
-  list: {
-    paddingTop: 18,
-    paddingBottom: 30,
-    gap: 12,
-  },
+  browseButtonText: { color: '#FFFFFF', fontWeight: '700' },
+  list: { paddingTop: 18, paddingBottom: 30, gap: 12 },
   downloadCard: {
     flexDirection: 'row',
     alignItems: 'flex-start',
@@ -408,36 +366,18 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  fileIconText: {
-    color: '#2563EB',
-    fontSize: 18,
-    fontWeight: '800',
-  },
-  itemContent: {
-    flex: 1,
-  },
-  itemTitle: {
-    color: '#111827',
-    fontSize: 14,
-    fontWeight: '700',
-  },
+  fileIconText: { color: '#2563EB', fontSize: 18, fontWeight: '800' },
+  itemContent: { flex: 1 },
+  itemTitle: { color: '#111827', fontSize: 14, fontWeight: '700' },
+  itemFileName: { color: '#64748B', fontSize: 10, marginTop: 4 },
   itemMeta: {
     color: '#16A34A',
     fontSize: 11,
     fontWeight: '700',
     marginTop: 5,
   },
-  itemDate: {
-    color: '#94A3B8',
-    fontSize: 10,
-    marginTop: 5,
-  },
-  itemUrl: {
-    color: '#64748B',
-    fontSize: 10,
-    lineHeight: 15,
-    marginTop: 6,
-  },
+  itemDate: { color: '#94A3B8', fontSize: 10, marginTop: 5 },
+  itemUrl: { color: '#64748B', fontSize: 10, lineHeight: 15, marginTop: 6 },
   deleteButton: {
     width: 30,
     height: 30,
@@ -446,12 +386,6 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     backgroundColor: '#FEF2F2',
   },
-  deleteText: {
-    color: '#DC2626',
-    fontSize: 23,
-    lineHeight: 25,
-  },
-  pressed: {
-    opacity: 0.75,
-  },
+  deleteText: { color: '#DC2626', fontSize: 23, lineHeight: 25 },
+  pressed: { opacity: 0.75 },
 });
