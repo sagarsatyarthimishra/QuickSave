@@ -4,15 +4,18 @@ import { useCallback, useState } from 'react';
 import {
   Alert,
   Pressable,
+  RefreshControl,
   ScrollView,
+  Share,
   StyleSheet,
   Text,
   View,
-  RefreshControl,
 } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
+import * as FileSystem from 'expo-file-system/legacy';
+import * as Sharing from 'expo-sharing';
 
 const STORAGE_KEY = '@quicksave_download_history';
 
@@ -58,11 +61,28 @@ export default function DownloadsScreen() {
   const [downloads, setDownloads] = useState<DownloadItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [busyId, setBusyId] = useState<string | null>(null);
 
   const loadDownloads = useCallback(async () => {
     try {
       const saved = await AsyncStorage.getItem(STORAGE_KEY);
-      setDownloads(parseHistory(saved));
+      const history = parseHistory(saved);
+
+      const seen = new Set<string>();
+      const uniqueHistory = history.filter((item) => {
+        if (seen.has(item.id)) return false;
+        seen.add(item.id);
+        return true;
+      });
+
+      setDownloads(uniqueHistory);
+
+      if (uniqueHistory.length !== history.length) {
+        await AsyncStorage.setItem(
+          STORAGE_KEY,
+          JSON.stringify(uniqueHistory),
+        );
+      }
     } catch {
       Alert.alert('Error', 'Could not load download history.');
     } finally {
@@ -82,33 +102,38 @@ export default function DownloadsScreen() {
     void loadDownloads();
   }, [loadDownloads]);
 
+  const persistHistory = useCallback(async (updated: DownloadItem[]) => {
+    await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
+    setDownloads(updated);
+  }, []);
+
+  const removeFromHistory = useCallback(
+    async (id: string) => {
+      try {
+        await persistHistory(downloads.filter((item) => item.id !== id));
+      } catch {
+        Alert.alert('Error', 'Could not update download history.');
+      }
+    },
+    [downloads, persistHistory],
+  );
+
   const deleteItem = useCallback(
-    (id: string) => {
+    (item: DownloadItem) => {
       Alert.alert(
         'Remove from history?',
-        'This removes the entry from QuickSave history, but does not delete the video from Gallery.',
+        'This removes the entry from QuickSave history. It will not delete a copy already saved to your Gallery.',
         [
           { text: 'Cancel', style: 'cancel' },
           {
             text: 'Remove',
             style: 'destructive',
-            onPress: async () => {
-              try {
-                const updated = downloads.filter((item) => item.id !== id);
-                await AsyncStorage.setItem(
-                  STORAGE_KEY,
-                  JSON.stringify(updated),
-                );
-                setDownloads(updated);
-              } catch {
-                Alert.alert('Error', 'Could not remove this history entry.');
-              }
-            },
+            onPress: () => void removeFromHistory(item.id),
           },
         ],
       );
     },
-    [downloads],
+    [removeFromHistory],
   );
 
   const clearHistory = useCallback(() => {
@@ -122,8 +147,7 @@ export default function DownloadsScreen() {
           style: 'destructive',
           onPress: async () => {
             try {
-              await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify([]));
-              setDownloads([]);
+              await persistHistory([]);
             } catch {
               Alert.alert('Error', 'Could not clear download history.');
             }
@@ -131,14 +155,99 @@ export default function DownloadsScreen() {
         },
       ],
     );
+  }, [persistHistory]);
+
+  const checkLocalFile = useCallback(async (item: DownloadItem) => {
+    if (!item.fileUri) {
+      throw new Error('The saved video path is missing.');
+    }
+
+    const info = await FileSystem.getInfoAsync(item.fileUri);
+
+    if (!info.exists) {
+      throw new Error(
+        'The video file is missing from QuickSave storage. Check Gallery or download the video again.',
+      );
+    }
+
+    return item.fileUri;
   }, []);
 
-  const formatDate = (value: string) => {
+  const openVideo = useCallback(
+    async (item: DownloadItem) => {
+      if (busyId) return;
+
+      setBusyId(item.id);
+
+      try {
+        const uri = await checkLocalFile(item);
+
+        router.push({
+          pathname: '/video-player' as any,
+          params: {
+            uri,
+            title: item.title || item.fileName || 'QuickSave Video',
+          },
+        });
+      } catch (error) {
+        Alert.alert(
+          'Could not open video',
+          error instanceof Error ? error.message : 'Please try again.',
+          [
+            { text: 'OK', style: 'cancel' },
+            {
+              text: 'Remove history',
+              style: 'destructive',
+              onPress: () => void removeFromHistory(item.id),
+            },
+          ],
+        );
+      } finally {
+        setBusyId(null);
+      }
+    },
+    [busyId, checkLocalFile, router, removeFromHistory],
+  );
+
+  const shareVideo = useCallback(
+    async (item: DownloadItem) => {
+      if (busyId) return;
+
+      setBusyId(item.id);
+
+      try {
+        const uri = await checkLocalFile(item);
+        const available = await Sharing.isAvailableAsync();
+
+        if (available) {
+          await Sharing.shareAsync(uri, {
+            mimeType: 'video/mp4',
+            dialogTitle: `Share ${item.title || item.fileName || 'video'}`,
+          });
+        } else {
+          await Share.share({
+            message: `${item.title || item.fileName || 'Downloaded video'}\n${item.url}`,
+          });
+        }
+      } catch (error) {
+        Alert.alert(
+          'Could not share video',
+          error instanceof Error ? error.message : 'Please try again.',
+        );
+      } finally {
+        setBusyId(null);
+      }
+    },
+    [busyId, checkLocalFile],
+  );
+
+  const formatDate = useCallback((value: string) => {
     const date = new Date(value);
+
     return Number.isNaN(date.getTime())
       ? 'Date unavailable'
       : date.toLocaleString();
-  };
+  }, []);
 
   return (
     <SafeAreaView style={styles.container}>
@@ -156,6 +265,7 @@ export default function DownloadsScreen() {
             accessibilityRole="button"
             accessibilityLabel="Clear all download history"
             hitSlop={8}
+            disabled={Boolean(busyId)}
           >
             <Text style={styles.clearText}>Clear all</Text>
           </Pressable>
@@ -170,8 +280,7 @@ export default function DownloadsScreen() {
         <View style={styles.summaryContent}>
           <Text style={styles.summaryTitle}>Download history</Text>
           <Text style={styles.summarySubtitle}>
-            {downloads.length} {downloads.length === 1 ? 'video' : 'videos'} in
-            history
+            {downloads.length} {downloads.length === 1 ? 'video' : 'videos'} in history
           </Text>
         </View>
 
@@ -183,27 +292,39 @@ export default function DownloadsScreen() {
           <Text style={styles.description}>Loading history...</Text>
         </View>
       ) : downloads.length === 0 ? (
-        <View style={styles.emptyCard}>
-          <View style={styles.iconCircle}>
-            <Text style={styles.icon}>↓</Text>
+        <ScrollView
+          contentContainerStyle={styles.emptyScroll}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={handleRefresh}
+              tintColor="#2563EB"
+            />
+          }
+        >
+          <View style={styles.emptyCard}>
+            <View style={styles.iconCircle}>
+              <Text style={styles.icon}>↓</Text>
+            </View>
+
+            <Text style={styles.cardTitle}>No downloads yet</Text>
+            <Text style={styles.description}>
+              Completed videos will appear here after they are saved.
+              Pull down to refresh your history.
+            </Text>
+
+            <Pressable
+              onPress={() => router.replace('/')}
+              style={({ pressed }) => [
+                styles.browseButton,
+                pressed && styles.pressed,
+              ]}
+              accessibilityRole="button"
+            >
+              <Text style={styles.browseButtonText}>Go to Home</Text>
+            </Pressable>
           </View>
-
-          <Text style={styles.cardTitle}>No downloads yet</Text>
-          <Text style={styles.description}>
-            Completed videos will appear here after they are saved.
-          </Text>
-
-          <Pressable
-            onPress={() => router.replace('/')}
-            style={({ pressed }) => [
-              styles.browseButton,
-              pressed && styles.pressed,
-            ]}
-            accessibilityRole="button"
-          >
-            <Text style={styles.browseButtonText}>Go to Home</Text>
-          </Pressable>
-        </View>
+        </ScrollView>
       ) : (
         <ScrollView
           contentContainerStyle={styles.list}
@@ -218,14 +339,31 @@ export default function DownloadsScreen() {
         >
           {downloads.map((item) => (
             <View key={item.id} style={styles.downloadCard}>
-              <View style={styles.fileIcon}>
-                <Text style={styles.fileIconText}>▶</Text>
-              </View>
+              <Pressable
+                onPress={() => void openVideo(item)}
+                disabled={Boolean(busyId)}
+                accessibilityRole="button"
+                accessibilityLabel={`Play ${item.title || item.fileName || 'downloaded video'}`}
+                style={({ pressed }) => [
+                  styles.fileIcon,
+                  pressed && styles.pressed,
+                ]}
+              >
+                <Text style={styles.fileIconText}>
+                  {busyId === item.id ? '…' : '▶'}
+                </Text>
+              </Pressable>
 
               <View style={styles.itemContent}>
-                <Text style={styles.itemTitle} numberOfLines={2}>
-                  {item.title || item.fileName || `${item.platform} video`}
-                </Text>
+                <Pressable
+                  onPress={() => void openVideo(item)}
+                  disabled={Boolean(busyId)}
+                  accessibilityRole="button"
+                >
+                  <Text style={styles.itemTitle} numberOfLines={2}>
+                    {item.title || item.fileName || `${item.platform} video`}
+                  </Text>
+                </Pressable>
 
                 {item.fileName ? (
                   <Text style={styles.itemFileName} numberOfLines={1}>
@@ -244,13 +382,40 @@ export default function DownloadsScreen() {
                 <Text style={styles.itemUrl} numberOfLines={2}>
                   {item.url}
                 </Text>
+
+                <View style={styles.actions}>
+                  <Pressable
+                    onPress={() => void openVideo(item)}
+                    disabled={Boolean(busyId)}
+                    style={({ pressed }) => [
+                      styles.playButton,
+                      pressed && styles.pressed,
+                    ]}
+                    accessibilityRole="button"
+                  >
+                    <Text style={styles.playButtonText}>▶ Play</Text>
+                  </Pressable>
+
+                  <Pressable
+                    onPress={() => void shareVideo(item)}
+                    disabled={Boolean(busyId)}
+                    style={({ pressed }) => [
+                      styles.shareButton,
+                      pressed && styles.pressed,
+                    ]}
+                    accessibilityRole="button"
+                  >
+                    <Text style={styles.shareButtonText}>↗ Share</Text>
+                  </Pressable>
+                </View>
               </View>
 
               <Pressable
-                onPress={() => deleteItem(item.id)}
+                onPress={() => deleteItem(item)}
                 accessibilityRole="button"
                 accessibilityLabel="Remove from download history"
                 hitSlop={8}
+                disabled={Boolean(busyId)}
                 style={({ pressed }) => [
                   styles.deleteButton,
                   pressed && styles.pressed,
@@ -308,6 +473,7 @@ const styles = StyleSheet.create({
   summaryTitle: { color: '#111827', fontSize: 14, fontWeight: '700' },
   summarySubtitle: { color: '#64748B', fontSize: 11, marginTop: 4 },
   count: { color: '#2563EB', fontSize: 20, fontWeight: '800' },
+  emptyScroll: { flexGrow: 1, paddingBottom: 24 },
   emptyCard: {
     alignItems: 'center',
     backgroundColor: '#FFFFFF',
@@ -378,6 +544,26 @@ const styles = StyleSheet.create({
   },
   itemDate: { color: '#94A3B8', fontSize: 10, marginTop: 5 },
   itemUrl: { color: '#64748B', fontSize: 10, lineHeight: 15, marginTop: 6 },
+  actions: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: 10,
+  },
+  playButton: {
+    backgroundColor: '#2563EB',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 9,
+  },
+  playButtonText: { color: '#FFFFFF', fontSize: 12, fontWeight: '700' },
+  shareButton: {
+    backgroundColor: '#EFF6FF',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 9,
+  },
+  shareButtonText: { color: '#2563EB', fontSize: 12, fontWeight: '700' },
   deleteButton: {
     width: 30,
     height: 30,

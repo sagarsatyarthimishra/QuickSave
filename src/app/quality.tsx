@@ -1,4 +1,6 @@
 
+import { useLocalSearchParams, useRouter } from 'expo-router';
+import { StatusBar } from 'expo-status-bar';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
@@ -9,13 +11,10 @@ import {
   Text,
   View,
 } from 'react-native';
-import { useLocalSearchParams, useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { StatusBar } from 'expo-status-bar';
 
 const API_BASE_URL = 'http://192.168.1.7:5000';
 const REQUEST_TIMEOUT_MS = 60000;
-const SUPPORTED_EXTENSIONS = new Set(['mp4', 'webm', 'mov', 'm4v']);
 
 type VideoFormat = {
   id: string;
@@ -23,7 +22,6 @@ type VideoFormat = {
   resolution: number;
   ext: string;
   sizeBytes: number | null;
-  sizeType?: 'exact' | 'estimated' | 'unknown';
   hasAudio?: boolean;
 };
 
@@ -32,50 +30,17 @@ type VideoInfoResponse = {
   platform?: string;
   title?: string;
   duration?: number | null;
-  formats?: VideoFormat[];
+  qualities?: Array<{ value: string; label: string }>;
   message?: string;
 };
 
 type DownloadResponse = {
   success: boolean;
-  job?: {
-    id: string;
-    status?: string;
-  };
+  job?: { id: string; status?: string };
   message?: string;
 };
 
-function getQualityLabel(height: number) {
-  if (height >= 2160) return '4K';
-  if (height >= 1440) return '1440p';
-  if (height >= 1080) return '1080p';
-  if (height >= 720) return '720p';
-  if (height >= 480) return '480p';
-  if (height >= 360) return '360p';
-  if (height >= 240) return '240p';
-  return `${height}p`;
-}
-
-function formatSize(
-  bytes: number | null,
-  sizeType?: 'exact' | 'estimated' | 'unknown',
-) {
-  if (bytes == null || !Number.isFinite(bytes) || bytes <= 0) {
-    return 'Size unavailable';
-  }
-
-  const size =
-    bytes < 1024 * 1024
-      ? `${(bytes / 1024).toFixed(0)} KB`
-      : `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-
-  return sizeType === 'estimated' ? `~${size}` : size;
-}
-
-async function requestJson<T>(
-  url: string,
-  body?: Record<string, unknown>,
-): Promise<T> {
+async function requestJson<T>(url: string, body?: Record<string, unknown>): Promise<T> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
@@ -88,24 +53,20 @@ async function requestJson<T>(
     });
 
     const raw = await response.text();
-    let data: unknown;
+    let data: any;
 
     try {
       data = raw ? JSON.parse(raw) : {};
     } catch {
-      throw new Error('Server returned an invalid response.');
+      throw new Error('Backend returned an invalid response.');
     }
 
     if (!response.ok) {
-      const message =
-        typeof data === 'object' &&
-        data !== null &&
-        'message' in data &&
+      throw new Error(
         typeof data.message === 'string'
           ? data.message
-          : `Request failed (${response.status}).`;
-
-      throw new Error(message);
+          : `Request failed (${response.status}).`,
+      );
     }
 
     return data as T;
@@ -116,7 +77,7 @@ async function requestJson<T>(
 
     if (error instanceof TypeError) {
       throw new Error(
-        'Cannot connect to QuickSave backend. Check that the backend is running and your device is on the same Wi-Fi.',
+        'Cannot connect to QuickSave backend. Check that the backend is running and your phone and computer are on the same Wi-Fi.',
       );
     }
 
@@ -126,55 +87,49 @@ async function requestJson<T>(
   }
 }
 
-function getAvailableFormats(input: unknown): VideoFormat[] {
+function qualityLabel(height: number) {
+  if (height >= 2160) return '4K';
+  if (height >= 1440) return '1440p';
+  if (height >= 1080) return '1080p';
+  if (height >= 720) return '720p';
+  if (height >= 480) return '480p';
+  if (height >= 360) return '360p';
+  if (height >= 240) return '240p';
+  return `${height}p`;
+}
+
+function mapQualities(input: VideoInfoResponse['qualities']): VideoFormat[] {
   if (!Array.isArray(input)) return [];
 
-  const uniqueByResolution = new Map<number, VideoFormat>();
+  const unique = new Map<number, VideoFormat>();
 
   for (const item of input) {
-    if (!item || typeof item !== 'object') continue;
+    const resolution = Number(item?.value);
+    if (!Number.isFinite(resolution) || resolution <= 0) continue;
 
-    const format = item as VideoFormat;
-
-    if (
-      typeof format.id !== 'string' ||
-      !format.id.trim() ||
-      !Number.isFinite(format.resolution) ||
-      format.resolution <= 0 ||
-      typeof format.ext !== 'string' ||
-      !SUPPORTED_EXTENSIONS.has(format.ext.toLowerCase())
-    ) {
-      continue;
-    }
-
-    const existing = uniqueByResolution.get(format.resolution);
-
-    // Keep only one valid option per resolution.
-    if (!existing || format.ext.toLowerCase() === 'mp4') {
-      uniqueByResolution.set(format.resolution, format);
-    }
+    unique.set(resolution, {
+      id: String(resolution),
+      label: item.label || qualityLabel(resolution),
+      resolution,
+      ext: 'mp4',
+      sizeBytes: null,
+      hasAudio: true,
+    });
   }
 
-  return [...uniqueByResolution.values()].sort(
-    (a, b) => b.resolution - a.resolution,
-  );
+  return [...unique.values()].sort((a, b) => b.resolution - a.resolution);
 }
 
 export default function QualityScreen() {
   const router = useRouter();
+  const params = useLocalSearchParams<{ platform?: string; url?: string }>();
 
-  const params = useLocalSearchParams<{
-    platform?: string;
-    url?: string;
-  }>();
-
-  const videoUrl =
-    typeof params.url === 'string' ? params.url.trim() : '';
-
+  const videoUrl = typeof params.url === 'string' ? params.url.trim() : '';
   const requestedPlatform =
     typeof params.platform === 'string' ? params.platform : 'Video';
 
   const [videoInfo, setVideoInfo] = useState<VideoInfoResponse | null>(null);
+  const [formats, setFormats] = useState<VideoFormat[]>([]);
   const [selectedFormatId, setSelectedFormatId] = useState('');
   const [loading, setLoading] = useState(true);
   const [downloading, setDownloading] = useState(false);
@@ -185,42 +140,39 @@ export default function QualityScreen() {
     setLoading(true);
     setError('');
     setVideoInfo(null);
+    setFormats([]);
     setSelectedFormatId('');
 
     if (!videoUrl) {
-      setError('Video URL is missing. Please go back and enter a URL.');
+      setError('Video URL is missing. Go back and enter a URL.');
       setLoading(false);
       return;
     }
 
     try {
+      // Backend route is GET /api/video-info?url=...
       const data = await requestJson<VideoInfoResponse>(
-        `${API_BASE_URL}/api/video-info`,
-        { url: videoUrl },
+        `${API_BASE_URL}/api/video-info?url=${encodeURIComponent(videoUrl)}`,
       );
 
       if (!data.success) {
-        throw new Error(data.message || 'Unable to retrieve video qualities.');
+        throw new Error(data.message || 'Could not load video information.');
       }
 
-      const availableFormats = getAvailableFormats(data.formats);
+      const available = mapQualities(data.qualities);
+      setVideoInfo(data);
+      setFormats(available);
 
-      setVideoInfo({
-        ...data,
-        formats: availableFormats,
-      });
-
-      if (availableFormats.length === 0) {
-        setError('No supported video qualities are available for this video.');
-        return;
+      if (available.length > 0) {
+        setSelectedFormatId(available[0].id);
+      } else {
+        setError(
+          'YouTube did not return available qualities. You can retry, or check the backend logs.',
+        );
       }
-
-      setSelectedFormatId(availableFormats[0].id);
     } catch (err) {
       setError(
-        err instanceof Error
-          ? err.message
-          : 'Could not retrieve video information.',
+        err instanceof Error ? err.message : 'Could not load video information.',
       );
     } finally {
       setLoading(false);
@@ -231,18 +183,9 @@ export default function QualityScreen() {
     void loadVideoInfo();
   }, [loadVideoInfo, retryKey]);
 
-  const formats = videoInfo?.formats ?? [];
-
-  const resolutions = useMemo(
-    () =>
-      [...new Set(formats.map((format) => format.resolution))].sort(
-        (a, b) => b - a,
-      ),
-    [formats],
-  );
-
-  const selectedFormat = formats.find(
-    (format) => format.id === selectedFormatId,
+  const selectedFormat = useMemo(
+    () => formats.find((item) => item.id === selectedFormatId),
+    [formats, selectedFormatId],
   );
 
   const handleDownload = useCallback(async () => {
@@ -251,7 +194,6 @@ export default function QualityScreen() {
     setDownloading(true);
 
     try {
-      // The backend validates and uses the numeric resolution in `quality`.
       const result = await requestJson<DownloadResponse>(
         `${API_BASE_URL}/api/download`,
         {
@@ -263,9 +205,7 @@ export default function QualityScreen() {
       const jobId = result.job?.id;
 
       if (!result.success || !jobId) {
-        throw new Error(
-          result.message || 'Backend did not return a download job ID.',
-        );
+        throw new Error(result.message || 'Backend did not return a download job ID.');
       }
 
       router.push({
@@ -286,37 +226,29 @@ export default function QualityScreen() {
     } finally {
       setDownloading(false);
     }
-  }, [
-    selectedFormat,
-    downloading,
-    videoUrl,
-    router,
-    videoInfo?.title,
-    videoInfo?.platform,
-    requestedPlatform,
-  ]);
+  }, [selectedFormat, downloading, videoUrl, router, videoInfo, requestedPlatform]);
 
   return (
     <SafeAreaView style={styles.safeArea}>
       <StatusBar style="dark" />
 
-      <ScrollView
-        contentContainerStyle={styles.container}
-        showsVerticalScrollIndicator={false}
-      >
+      <ScrollView contentContainerStyle={styles.container}>
+        <Pressable onPress={() => router.back()} style={styles.backButton}>
+          <Text style={styles.backText}>‹ Back</Text>
+        </Pressable>
+
         <Text style={styles.heading}>Choose Quality</Text>
         <Text style={styles.subtitle}>
-          Only qualities available for this video are shown.
+          Choose a resolution available for this video.
         </Text>
 
         <View style={styles.videoCard}>
           <Text style={styles.platform}>
-            {videoInfo?.platform ?? requestedPlatform}
+            {videoInfo?.platform || requestedPlatform}
           </Text>
           <Text style={styles.videoTitle}>
-            {videoInfo?.title ?? 'Video information'}
+            {videoInfo?.title || 'Video information'}
           </Text>
-
           {videoInfo?.duration != null && (
             <Text style={styles.duration}>
               Duration: {videoInfo.duration} seconds
@@ -327,101 +259,57 @@ export default function QualityScreen() {
         {loading ? (
           <View style={styles.centerState}>
             <ActivityIndicator size="large" color="#2563EB" />
-            <Text style={styles.stateText}>
-              Fetching available qualities...
-            </Text>
+            <Text style={styles.stateText}>Loading video qualities...</Text>
           </View>
         ) : error ? (
           <View style={styles.errorCard}>
-            <Text style={styles.errorTitle}>
-              {formats.length === 0
-                ? 'No qualities available'
-                : 'Could not load qualities'}
-            </Text>
+            <Text style={styles.errorTitle}>Could not load qualities</Text>
             <Text style={styles.errorText}>{error}</Text>
-
             <Pressable
               style={styles.retryButton}
               onPress={() => setRetryKey((value) => value + 1)}
-              accessibilityRole="button"
             >
               <Text style={styles.retryText}>Retry</Text>
             </Pressable>
           </View>
         ) : (
           <>
-            {resolutions.length > 0 && (
-              <Text style={styles.sectionTitle}>Available resolutions</Text>
-            )}
+            <Text style={styles.sectionTitle}>Available resolutions</Text>
 
-            {resolutions.map((resolution) => {
-              const options = formats.filter(
-                (format) => format.resolution === resolution,
-              );
-
-              // No empty resolution groups are rendered.
-              if (options.length === 0) return null;
+            {formats.map((format) => {
+              const selected = format.id === selectedFormatId;
 
               return (
-                <View key={resolution} style={styles.qualityCard}>
-                  <View style={styles.qualityHeader}>
+                <Pressable
+                  key={format.id}
+                  onPress={() => setSelectedFormatId(format.id)}
+                  disabled={downloading}
+                  accessibilityRole="radio"
+                  accessibilityState={{ selected }}
+                  style={[styles.qualityCard, selected && styles.selectedOption]}
+                >
+                  <View style={[styles.radio, selected && styles.radioSelected]}>
+                    {selected && <View style={styles.radioDot} />}
+                  </View>
+
+                  <View style={styles.formatDetails}>
                     <Text style={styles.qualityName}>
-                      {getQualityLabel(resolution)}
+                      {qualityLabel(format.resolution)}
                     </Text>
-                    <Text style={styles.pixelText}>
-                      {resolution} pixels high
+                    <Text style={styles.formatSize}>
+                      {format.resolution}p · MP4 (output format)
                     </Text>
                   </View>
 
-                  {options.map((format) => {
-                    const selected = format.id === selectedFormatId;
-
-                    return (
-                      <Pressable
-                        key={format.id}
-                        onPress={() => setSelectedFormatId(format.id)}
-                        disabled={downloading}
-                        accessibilityRole="radio"
-                        accessibilityState={{ selected }}
-                        style={[
-                          styles.formatOption,
-                          selected && styles.selectedOption,
-                        ]}
-                      >
-                        <View
-                          style={[
-                            styles.radio,
-                            selected && styles.radioSelected,
-                          ]}
-                        >
-                          {selected && <View style={styles.radioDot} />}
-                        </View>
-
-                        <View style={styles.formatDetails}>
-                          <Text style={styles.formatName}>
-                            {format.ext.toUpperCase()}
-                          </Text>
-                          <Text style={styles.formatSize}>
-                            {format.label} ·{' '}
-                            {formatSize(format.sizeBytes, format.sizeType)}
-                            {format.hasAudio === false ? ' · Video only' : ''}
-                          </Text>
-                        </View>
-
-                        {selected && (
-                          <Text style={styles.selectedLabel}>Selected</Text>
-                        )}
-                      </Pressable>
-                    );
-                  })}
-                </View>
+                  {selected && <Text style={styles.selectedLabel}>Selected</Text>}
+                </Pressable>
               );
             })}
 
             <View style={styles.notice}>
               <Text style={styles.noticeTitle}>Ready to download</Text>
               <Text style={styles.noticeText}>
-                Choose one of the available qualities and tap Download Video.
+                The backend will select the best available stream up to the chosen resolution.
               </Text>
             </View>
 
@@ -432,7 +320,6 @@ export default function QualityScreen() {
               ]}
               onPress={() => void handleDownload()}
               disabled={!selectedFormat || downloading}
-              accessibilityRole="button"
             >
               {downloading ? (
                 <View style={styles.buttonContent}>
@@ -453,73 +340,55 @@ export default function QualityScreen() {
 const styles = StyleSheet.create({
   safeArea: { flex: 1, backgroundColor: '#F8FAFC' },
   container: { padding: 20, paddingBottom: 40 },
+  backButton: { alignSelf: 'flex-start', paddingVertical: 8, marginBottom: 10 },
+  backText: { color: '#2563EB', fontWeight: '700', fontSize: 15 },
   heading: { fontSize: 28, fontWeight: '800', color: '#0F172A' },
-  subtitle: { fontSize: 15, color: '#64748B', marginTop: 6, marginBottom: 22 },
+  subtitle: { fontSize: 14, color: '#64748B', marginTop: 6, marginBottom: 22 },
   videoCard: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 16,
-    padding: 16,
-    marginBottom: 24,
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
+    backgroundColor: '#FFFFFF', borderRadius: 16, padding: 16,
+    marginBottom: 24, borderWidth: 1, borderColor: '#E2E8F0',
   },
   platform: { color: '#2563EB', fontSize: 13, fontWeight: '700', marginBottom: 8 },
   videoTitle: { fontSize: 16, fontWeight: '700', color: '#0F172A', lineHeight: 23 },
   duration: { marginTop: 8, color: '#64748B', fontSize: 13 },
   sectionTitle: { fontSize: 18, fontWeight: '700', color: '#0F172A', marginBottom: 12 },
   qualityCard: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 16,
-    padding: 14,
-    marginBottom: 12,
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-  },
-  qualityHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 10,
-  },
-  qualityName: { fontSize: 18, fontWeight: '800', color: '#0F172A' },
-  pixelText: { fontSize: 12, color: '#64748B' },
-  formatOption: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    padding: 12,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-    marginTop: 8,
+    flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFFFFF',
+    borderRadius: 15, padding: 15, marginBottom: 10,
+    borderWidth: 1, borderColor: '#E2E8F0',
   },
   selectedOption: { borderColor: '#2563EB', backgroundColor: '#EFF6FF' },
   radio: {
-    width: 20,
-    height: 20,
-    borderRadius: 10,
-    borderWidth: 2,
-    borderColor: '#94A3B8',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 10,
+    width: 20, height: 20, borderRadius: 10, borderWidth: 2,
+    borderColor: '#94A3B8', alignItems: 'center', justifyContent: 'center',
+    marginRight: 12,
   },
   radioSelected: { borderColor: '#2563EB' },
   radioDot: { width: 10, height: 10, borderRadius: 5, backgroundColor: '#2563EB' },
   formatDetails: { flex: 1 },
-  formatName: { fontSize: 14, fontWeight: '700', color: '#0F172A' },
-  formatSize: { fontSize: 12, color: '#64748B', marginTop: 3 },
+  qualityName: { fontSize: 16, fontWeight: '800', color: '#0F172A' },
+  formatSize: { fontSize: 12, color: '#64748B', marginTop: 4 },
   selectedLabel: { fontSize: 11, color: '#2563EB', fontWeight: '700', marginLeft: 6 },
   centerState: { paddingVertical: 50, alignItems: 'center' },
   stateText: { marginTop: 12, color: '#64748B', fontSize: 14 },
-  errorCard: { backgroundColor: '#FEF2F2', padding: 16, borderRadius: 14, borderWidth: 1, borderColor: '#FECACA' },
+  errorCard: {
+    backgroundColor: '#FEF2F2', padding: 16, borderRadius: 14,
+    borderWidth: 1, borderColor: '#FECACA',
+  },
   errorTitle: { fontSize: 16, fontWeight: '700', color: '#991B1B' },
   errorText: { color: '#991B1B', marginTop: 8, lineHeight: 21 },
   retryButton: { alignSelf: 'flex-start', paddingVertical: 10, marginTop: 8 },
   retryText: { color: '#1D4ED8', fontWeight: '700' },
-  notice: { backgroundColor: '#FFF7ED', borderColor: '#FED7AA', borderWidth: 1, borderRadius: 14, padding: 14, marginTop: 8 },
+  notice: {
+    backgroundColor: '#FFF7ED', borderColor: '#FED7AA', borderWidth: 1,
+    borderRadius: 14, padding: 14, marginTop: 8,
+  },
   noticeTitle: { color: '#9A3412', fontSize: 14, fontWeight: '800' },
   noticeText: { color: '#9A3412', fontSize: 13, lineHeight: 19, marginTop: 5 },
-  continueButton: { backgroundColor: '#2563EB', padding: 16, borderRadius: 14, alignItems: 'center', marginTop: 18 },
+  continueButton: {
+    backgroundColor: '#2563EB', padding: 16, borderRadius: 14,
+    alignItems: 'center', marginTop: 18,
+  },
   buttonContent: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   disabledButton: { opacity: 0.5 },
   continueText: { color: '#FFFFFF', fontSize: 15, fontWeight: '800' },
